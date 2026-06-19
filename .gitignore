@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# App
+backend/books.db
+backend/.env
+
+# OS
+.DS_Store

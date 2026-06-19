@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Goodreads Sentiment Analysis</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface-raised: #22263a;
+      --border: #2e3350;
+      --text-primary: #e8eaf6;
+      --text-secondary: #8b90b8;
+      --accent: #6c7ff5;
+      --accent-hover: #8a97f7;
+      --error-bg: #2d1a1a;
+      --error-border: #7f2020;
+      --error-text: #f87171;
+      --star-filled: #f5a623;
+      --star-empty: #3a3f60;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-primary);
+      font-family: var(--font);
+      min-height: 100vh;
+      padding: 40px 16px 80px;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    header h1 {
+      font-size: 1.9rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    header p {
+      color: var(--text-secondary);
+      font-size: 1rem;
+    }
+
+    .search-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+
+    .search-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: var(--font);
+      font-size: 0.95rem;
+      padding: 11px 16px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]::placeholder {
+      color: var(--text-secondary);
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    button[type="submit"] {
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 11px 22px;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
+    }
+
+    button[type="submit"]:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    button[type="submit"]:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    /* Loading */
+    .loading {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 18px;
+    }
+
+    .loading.visible {
+      display: flex;
+    }
+
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Error */
+    .error-banner {
+      display: none;
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      border-radius: var(--radius-sm);
+      color: var(--error-text);
+      font-size: 0.9rem;
+      padding: 12px 16px;
+      margin-top: 16px;
+    }
+
+    .error-banner.visible {
+      display: block;
+    }
+
+    /* Result card */
+    .result-card {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+      animation: fadeIn 0.3s ease;
+    }
+
+    .result-card.visible {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .result-card h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1.3;
+    }
+
+    .badge-cached {
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      padding: 3px 10px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+      align-self: flex-start;
+      margin-top: 3px;
+    }
+
+    .rating-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .stars {
+      font-size: 1.4rem;
+      letter-spacing: 2px;
+      color: var(--star-filled);
+    }
+
+    .stars .empty {
+      color: var(--star-empty);
+    }
+
+    .rating-numeric {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .summary {
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      line-height: 1.75;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Goodreads Sentiment Analysis</h1>
+      <p>Enter a book title to get AI-powered reader sentiment</p>
+    </header>
+
+    <div class="search-card">
+      <form id="search-form">
+        <div class="search-row">
+          <input
+            type="text"
+            id="book-input"
+            placeholder="e.g. The Great Gatsby"
+            autocomplete="off"
+            required
+          />
+          <button type="submit" id="analyze-btn">Analyze</button>
+        </div>
+        <div class="loading" id="loading">
+          <div class="spinner"></div>
+          <span>Analyzing reader sentiment&hellip;</span>
+        </div>
+        <div class="error-banner" id="error-banner"></div>
+      </form>
+    </div>
+
+    <div class="result-card" id="result-card">
+      <div class="result-header">
+        <h2 id="result-title"></h2>
+        <span class="badge-cached" id="badge-cached" style="display:none">Cached result</span>
+      </div>
+      <div class="rating-row">
+        <div class="stars" id="stars-display"></div>
+        <div class="rating-numeric" id="rating-numeric"></div>
+      </div>
+      <hr class="divider" />
+      <p class="summary" id="result-summary"></p>
+    </div>
+  </div>
+
+  <script>
+    const form        = document.getElementById('search-form');
+    const input       = document.getElementById('book-input');
+    const btn         = document.getElementById('analyze-btn');
+    const loading     = document.getElementById('loading');
+    const errorBanner = document.getElementById('error-banner');
+    const resultCard  = document.getElementById('result-card');
+    const resultTitle = document.getElementById('result-title');
+    const badgeCached = document.getElementById('badge-cached');
+    const starsDisplay = document.getElementById('stars-display');
+    const ratingNum   = document.getElementById('rating-numeric');
+    const resultSum   = document.getElementById('result-summary');
+
+    function setLoading(on) {
+      btn.disabled = on;
+      loading.classList.toggle('visible', on);
+    }
+
+    function showError(msg) {
+      errorBanner.textContent = msg;
+      errorBanner.classList.add('visible');
+    }
+
+    function clearError() {
+      errorBanner.textContent = '';
+      errorBanner.classList.remove('visible');
+    }
+
+    function renderStars(rating) {
+      // Round to nearest 0.5
+      const rounded = Math.round(rating * 2) / 2;
+      let html = '';
+      for (let i = 1; i <= 5; i++) {
+        if (i <= rounded) {
+          html += '<span>&#9733;</span>';
+        } else if (i - 0.5 === rounded) {
+          // Half-star: use filled star with reduced opacity via a wrapper span
+          html += '<span style="opacity:0.55">&#9733;</span>';
+        } else {
+          html += '<span class="empty">&#9734;</span>';
+        }
+      }
+      return html;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+
+      clearError();
+      resultCard.classList.remove('visible');
+      setLoading(true);
+
+      try {
+        const response = await fetch('http://localhost:8000/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ book_title: title }),
+        });
+
+        if (!response.ok) {
+          let errMsg = `Server error: ${response.status}`;
+          try {
+            const errData = await response.json();
+            if (errData.detail) errMsg = errData.detail;
+            else if (errData.message) errMsg = errData.message;
+          } catch (_) {}
+          throw new Error(errMsg);
+        }
+
+        const data = await response.json();
+
+        // Populate result card
+        resultTitle.textContent = data.book_title || title;
+        starsDisplay.innerHTML  = renderStars(data.avg_rating ?? 0);
+        ratingNum.textContent   = `${(data.avg_rating ?? 0).toFixed(1)} / 5`;
+        resultSum.textContent   = data.summary || '';
+        badgeCached.style.display = data.cached ? 'inline-block' : 'none';
+
+        resultCard.classList.add('visible');
+      } catch (err) {
+        if (err.name === 'TypeError') {
+          showError('Could not connect to the server. Make sure the backend is running on localhost:8000.');
+        } else {
+          showError(err.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    });
+  </script>
+</body>
+</html>
