@@ -23,6 +23,52 @@ async def scrape_goodreads(title: str) -> tuple[list[str], float, str, str]:
         return _MOCK_REVIEWS, 0.0, "", ""
 
 
+async def _collect_reviews(page, target: int = 30) -> list[str]:
+    LOCATORS = [".ReviewText__content", ".reviewText span[id]", "section.ReviewText"]
+    # Selectors for the "...more" expand buttons on collapsed reviews
+    EXPAND_SELECTORS = [
+        "button.ReviewText__truncatedTextLink",
+        ".ReviewText__truncatedTextLink",
+        "button.Spoiler__button",
+    ]
+    seen: set[str] = set()
+    reviews: list[str] = []
+
+    for _ in range(8):  # max 8 scroll attempts
+        # Expand all collapsed reviews visible on screen
+        for sel in EXPAND_SELECTORS:
+            btns = await page.locator(sel).all()
+            for btn in btns:
+                try:
+                    await btn.click()
+                    await asyncio.sleep(0.1)
+                except Exception:
+                    pass
+
+        for locator_str in LOCATORS:
+            els = await page.locator(locator_str).all()
+            for el in els:
+                text = (await el.text_content() or "").strip()
+                if len(text) > 50 and text not in seen:
+                    seen.add(text)
+                    reviews.append(text[:500])
+            if reviews:
+                break
+
+        if len(reviews) >= target:
+            break
+
+        prev_count = len(seen)
+        await page.evaluate("window.scrollBy(0, 2000)")
+        await asyncio.sleep(1.2)
+
+        # Stop if scroll yielded nothing new
+        if len(seen) == prev_count and prev_count > 0:
+            break
+
+    return reviews
+
+
 async def _fetch(title: str) -> tuple[list[str], float, str, str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -75,23 +121,8 @@ async def _fetch(title: str) -> tuple[list[str], float, str, str]:
             except PlaywrightTimeout:
                 pass
 
-            # Scroll to trigger review loading
-            await page.evaluate("window.scrollBy(0, 1500)")
-            await asyncio.sleep(1)
-
-            reviews = []
-            for locator_str in [
-                ".ReviewText__content",
-                ".reviewText span[id]",
-                "section.ReviewText",
-            ]:
-                els = await page.locator(locator_str).all()
-                for el in els:
-                    text = (await el.text_content() or "").strip()
-                    if len(text) > 50:
-                        reviews.append(text[:500])
-                if reviews:
-                    break
+            # Scroll repeatedly to load more reviews
+            reviews = await _collect_reviews(page, target=30)
 
             return reviews or _MOCK_REVIEWS, rating, author, goodreads_url
 

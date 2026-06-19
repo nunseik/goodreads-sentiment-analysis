@@ -40,6 +40,11 @@ async def analyze_book(request: AnalyzeRequest):
 
     reviews, scraped_rating, author, goodreads_url = await scrape_goodreads(title)
     sentiment = analyze_reviews(reviews)
+    print(f"\n[sentiment] '{title}'")
+    print(f"  reviews   : {len(reviews)}")
+    print(f"  compound  : {sentiment['avg_compound']}")
+    print(f"  stars     : {sentiment['avg_star_rating']}")
+    print(f"  scraped ★ : {scraped_rating}")
     summary, llm_rating = generate_summary(title, reviews, sentiment)
     avg_rating = round(scraped_rating if scraped_rating > 0 else llm_rating, 2)
 

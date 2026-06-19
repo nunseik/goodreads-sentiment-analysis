@@ -8,17 +8,21 @@ MODEL = "gemma4:e2b-mlx"
 
 def generate_summary(book_title: str, reviews: list[str], sentiment: dict) -> tuple[str, float]:
     """Returns (summary, rating). Rating is Ollama's estimate from 1.0–5.0."""
-    sample = reviews[:5]
-    sample_text = "\n".join(f"- {r[:200]}" for r in sample)
+    sample = _select_reviews(reviews, sentiment["breakdown"])
+    sample_text = "\n".join(f'- "{r[:250]}"' for r in sample)
     mood = "positive" if sentiment["avg_compound"] > 0.1 else "mixed" if sentiment["avg_compound"] > -0.1 else "negative"
 
     prompt = (
-        f"You are a literary critic. Based on the following reader reviews of \"{book_title}\", "
-        f"produce a JSON object with exactly two keys:\n"
-        f"  \"summary\": a concise 2-3 sentence paragraph of what readers think of the book\n"
+        f"You are a literary critic writing for a book review website. "
+        f"Based on the reader reviews of \"{book_title}\" below, produce a JSON object with exactly two keys:\n"
+        f"  \"summary\": 4-5 sentences covering what readers specifically praised or criticised. "
+        f"Open with an overall impression, then go deeper — mention writing style, characters, plot, or pacing "
+        f"as the reviews highlight them, including any notable criticisms or divisive opinions. "
+        f"Vary your sentence structure. Do not open with 'Readers' or repeat the book title in every sentence. "
+        f"Be specific and vivid, not generic.\n"
         f"  \"rating\": your estimated star rating from 1.0 to 5.0 based on the reviews\n\n"
-        f"The overall reader sentiment is {mood}.\n\n"
-        f"Sample reviews:\n{sample_text}\n\n"
+        f"Overall sentiment: {mood} (avg rating {sentiment['avg_star_rating']:.1f}/5)\n\n"
+        f"Reviews (mix of positive, negative, and neutral):\n{sample_text}\n\n"
         f"Respond with only valid JSON, no markdown fences, no extra text."
     )
 
@@ -41,8 +45,25 @@ def generate_summary(book_title: str, reviews: list[str], sentiment: dict) -> tu
         return _fallback_summary(book_title, sentiment), sentiment["avg_star_rating"]
 
 
+def _select_reviews(reviews: list[str], breakdown: list[dict]) -> list[str]:
+    """Pick a spread: 2 most positive, 2 most negative, 1 closest to neutral."""
+    if len(reviews) <= 5:
+        return reviews
+
+    paired = sorted(
+        zip(breakdown, reviews),
+        key=lambda x: x[0]["compound"]
+    )
+    most_negative = [r for _, r in paired[:2]]
+    most_positive = [r for _, r in paired[-2:]]
+
+    mid = len(paired) // 2
+    neutral = [paired[mid][1]]
+
+    return most_positive + most_negative + neutral
+
+
 def _parse_json(raw: str) -> dict:
-    # Strip markdown fences if the model ignored instructions
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
     return json.loads(cleaned)
 
