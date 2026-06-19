@@ -15,14 +15,15 @@ _MOCK_REVIEWS = [
 ]
 
 
-async def scrape_goodreads(title: str) -> tuple[list[str], float]:
+async def scrape_goodreads(title: str) -> tuple[list[str], float, str, str]:
+    """Returns (reviews, rating, author, goodreads_url)."""
     try:
         return await _fetch(title)
     except Exception:
-        return _MOCK_REVIEWS, 0.0
+        return _MOCK_REVIEWS, 0.0, "", ""
 
 
-async def _fetch(title: str) -> tuple[list[str], float]:
+async def _fetch(title: str) -> tuple[list[str], float, str, str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -49,6 +50,8 @@ async def _fetch(title: str) -> tuple[list[str], float]:
             await book_link.click()
             await page.wait_for_load_state("domcontentloaded")
 
+            goodreads_url = page.url
+
             # Rating
             rating = 0.0
             try:
@@ -59,6 +62,17 @@ async def _fetch(title: str) -> tuple[list[str], float]:
                 rating_text = await rating_el.text_content()
                 rating = float(rating_text.strip().split()[0])
             except (PlaywrightTimeout, ValueError):
+                pass
+
+            # Author
+            author = ""
+            try:
+                author_el = page.locator(
+                    "span.ContributorLink__name, .authorName span[itemprop='name']"
+                ).first
+                await author_el.wait_for(timeout=5000)
+                author = (await author_el.text_content() or "").strip()
+            except PlaywrightTimeout:
                 pass
 
             # Scroll to trigger review loading
@@ -79,7 +93,7 @@ async def _fetch(title: str) -> tuple[list[str], float]:
                 if reviews:
                     break
 
-            return reviews or _MOCK_REVIEWS, rating
+            return reviews or _MOCK_REVIEWS, rating, author, goodreads_url
 
         finally:
             await browser.close()

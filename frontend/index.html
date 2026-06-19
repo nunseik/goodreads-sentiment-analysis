@@ -245,6 +245,28 @@
       margin-bottom: 20px;
     }
 
+    .author {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 2px;
+    }
+
+    .goodreads-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-decoration: none;
+      margin-top: 16px;
+    }
+
+    .goodreads-link:hover {
+      color: var(--accent-hover);
+      text-decoration: underline;
+    }
+
     .summary {
       color: var(--text-primary);
       font-size: 0.95rem;
@@ -281,7 +303,10 @@
 
     <div class="result-card" id="result-card">
       <div class="result-header">
-        <h2 id="result-title"></h2>
+        <div>
+          <h2 id="result-title"></h2>
+          <p class="author" id="result-author"></p>
+        </div>
         <span class="badge-cached" id="badge-cached" style="display:none">Cached result</span>
       </div>
       <div class="rating-row">
@@ -290,6 +315,9 @@
       </div>
       <hr class="divider" />
       <p class="summary" id="result-summary"></p>
+      <a class="goodreads-link" id="goodreads-link" href="#" target="_blank" rel="noopener" style="display:none">
+        ↗ View on Goodreads
+      </a>
     </div>
   </div>
 
@@ -299,12 +327,14 @@
     const btn         = document.getElementById('analyze-btn');
     const loading     = document.getElementById('loading');
     const errorBanner = document.getElementById('error-banner');
-    const resultCard  = document.getElementById('result-card');
-    const resultTitle = document.getElementById('result-title');
-    const badgeCached = document.getElementById('badge-cached');
-    const starsDisplay = document.getElementById('stars-display');
-    const ratingNum   = document.getElementById('rating-numeric');
-    const resultSum   = document.getElementById('result-summary');
+    const resultCard    = document.getElementById('result-card');
+    const resultTitle   = document.getElementById('result-title');
+    const resultAuthor  = document.getElementById('result-author');
+    const badgeCached   = document.getElementById('badge-cached');
+    const starsDisplay  = document.getElementById('stars-display');
+    const ratingNum     = document.getElementById('rating-numeric');
+    const resultSum     = document.getElementById('result-summary');
+    const goodreadsLink = document.getElementById('goodreads-link');
 
     function setLoading(on) {
       btn.disabled = on;
@@ -367,11 +397,18 @@
         const data = await response.json();
 
         // Populate result card
-        resultTitle.textContent = data.book_title || title;
-        starsDisplay.innerHTML  = renderStars(data.avg_rating ?? 0);
-        ratingNum.textContent   = `${(data.avg_rating ?? 0).toFixed(1)} / 5`;
-        resultSum.textContent   = data.summary || '';
+        resultTitle.textContent  = data.book_title || title;
+        resultAuthor.textContent = data.author ? `by ${data.author}` : '';
+        starsDisplay.innerHTML   = renderStars(data.avg_rating ?? 0);
+        ratingNum.textContent    = `${(data.avg_rating ?? 0).toFixed(1)} / 5`;
+        resultSum.textContent    = data.summary || '';
         badgeCached.style.display = data.cached ? 'inline-block' : 'none';
+        if (data.goodreads_url) {
+          goodreadsLink.href = data.goodreads_url;
+          goodreadsLink.style.display = 'inline-flex';
+        } else {
+          goodreadsLink.style.display = 'none';
+        }
 
         resultCard.classList.add('visible');
       } catch (err) {

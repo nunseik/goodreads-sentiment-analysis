@@ -38,13 +38,16 @@ async def analyze_book(request: AnalyzeRequest):
     if cached:
         return BookResponse(**cached, cached=True)
 
-    reviews, scraped_rating = await scrape_goodreads(title)
+    reviews, scraped_rating, author, goodreads_url = await scrape_goodreads(title)
     sentiment = analyze_reviews(reviews)
     summary, llm_rating = generate_summary(title, reviews, sentiment)
     avg_rating = round(scraped_rating if scraped_rating > 0 else llm_rating, 2)
 
-    save_book(title, summary, avg_rating, reviews)
-    return BookResponse(book_title=title, summary=summary, avg_rating=avg_rating, cached=False)
+    save_book(title, author, summary, avg_rating, goodreads_url, reviews)
+    return BookResponse(
+        book_title=title, author=author, summary=summary,
+        avg_rating=avg_rating, goodreads_url=goodreads_url, cached=False,
+    )
 
 
 @app.get("/books")

@@ -7,6 +7,8 @@ class AnalyzeRequest(BaseModel):
 
 class BookResponse(BaseModel):
     book_title: str
+    author: str
     summary: str
     avg_rating: float
+    goodreads_url: str
     cached: bool
