@@ -2,6 +2,8 @@ import json
 import re
 import httpx
 
+from categorizer import categorize_reviews, get_category_summary
+
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "gemma4:e2b-mlx"
 
@@ -12,6 +14,10 @@ def generate_summary(book_title: str, reviews: list[str], sentiment: dict) -> tu
     sample_text = "\n".join(f'- "{r[:250]}"' for r in sample)
     mood = "positive" if sentiment["avg_compound"] > 0.1 else "mixed" if sentiment["avg_compound"] > -0.1 else "negative"
 
+    categories = categorize_reviews(reviews)
+    cat_summary = get_category_summary(categories)
+    themes_line = ", ".join(f"{k}: {v} reviews" for k, v in cat_summary.items() if v > 0)
+
     prompt = (
         f"You are a literary critic writing for a book review website. "
         f"Based on the reader reviews of \"{book_title}\" below, produce a JSON object with exactly two keys:\n"
@@ -21,6 +27,7 @@ def generate_summary(book_title: str, reviews: list[str], sentiment: dict) -> tu
         f"Vary your sentence structure. Do not open with 'Readers' or repeat the book title in every sentence. "
         f"Be specific and vivid, not generic.\n"
         f"  \"rating\": your estimated star rating from 1.0 to 5.0 based on the reviews\n\n"
+        f"Review themes mentioned: {themes_line}\n"
         f"Overall sentiment: {mood} (avg rating {sentiment['avg_star_rating']:.1f}/5)\n\n"
         f"Reviews (mix of positive, negative, and neutral):\n{sample_text}\n\n"
         f"Respond with only valid JSON, no markdown fences, no extra text."
@@ -46,7 +53,7 @@ def generate_summary(book_title: str, reviews: list[str], sentiment: dict) -> tu
 
 
 def _select_reviews(reviews: list[str], breakdown: list[dict]) -> list[str]:
-    """Pick a spread: 2 most positive, 2 most negative, 1 closest to neutral."""
+    """Pick a sentiment spread plus at least one review from each non-empty theme."""
     if len(reviews) <= 5:
         return reviews
 
@@ -60,7 +67,14 @@ def _select_reviews(reviews: list[str], breakdown: list[dict]) -> list[str]:
     mid = len(paired) // 2
     neutral = [paired[mid][1]]
 
-    return most_positive + most_negative + neutral
+    selected = most_positive + most_negative + neutral
+
+    categories = categorize_reviews(reviews)
+    for theme_reviews in categories.values():
+        if theme_reviews and not any(r in selected for r in theme_reviews):
+            selected.append(theme_reviews[0])
+
+    return selected
 
 
 def _parse_json(raw: str) -> dict:

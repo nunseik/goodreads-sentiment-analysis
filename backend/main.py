@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from database import get_book, init_db, save_book
+from database import get_book, get_cache_stats, init_db, save_book
 from models import AnalyzeRequest, BookResponse
 from scraper import scrape_goodreads
 from vader_sentiment import analyze_reviews
@@ -53,6 +53,11 @@ async def analyze_book(request: AnalyzeRequest):
         book_title=title, author=author, summary=summary,
         avg_rating=avg_rating, goodreads_url=goodreads_url, cached=False,
     )
+
+
+@app.get("/cache-stats")
+async def cache_stats():
+    return get_cache_stats()
 
 
 @app.get("/books")

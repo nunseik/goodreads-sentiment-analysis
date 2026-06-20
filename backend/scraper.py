@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 _MOCK_REVIEWS = [
@@ -15,8 +16,60 @@ _MOCK_REVIEWS = [
 ]
 
 
+async def scrape_open_library(title: str) -> tuple[list[str], float]:
+    """Fetch descriptive text + rating for a book from the Google Books API.
+
+    Open Library does not expose user review text, so we use Google Books'
+    public API (no key required) for a description snippet and average rating.
+    Returns (extra_reviews, rating). Failures return ([], 0.0).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://www.googleapis.com/books/v1/volumes",
+                params={"q": title, "maxResults": 5},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        extras: list[str] = []
+        rating = 0.0
+        for item in data.get("items", []):
+            info = item.get("volumeInfo", {})
+            desc = (info.get("description") or "").strip()
+            if desc and desc not in extras:
+                extras.append(desc[:500])
+            if rating == 0.0 and info.get("averageRating"):
+                try:
+                    rating = float(info["averageRating"])
+                except (TypeError, ValueError):
+                    pass
+        return extras, rating
+    except Exception:
+        return [], 0.0
+
+
 async def scrape_goodreads(title: str) -> tuple[list[str], float, str, str]:
-    """Returns (reviews, rating, author, goodreads_url)."""
+    """Returns (reviews, rating, author, goodreads_url).
+
+    Scrapes Goodreads and queries Google Books concurrently, then merges the
+    review text and falls back to the Google Books rating when Goodreads has none.
+    """
+    goodreads_task = asyncio.create_task(_fetch_safe(title))
+    google_task = asyncio.create_task(scrape_open_library(title))
+
+    (reviews, rating, author, goodreads_url), (extras, gb_rating) = await asyncio.gather(
+        goodreads_task, google_task
+    )
+
+    merged = reviews + extras
+    if rating == 0.0 and gb_rating:
+        rating = gb_rating
+
+    return merged or _MOCK_REVIEWS, rating, author, goodreads_url
+
+
+async def _fetch_safe(title: str) -> tuple[list[str], float, str, str]:
     try:
         return await _fetch(title)
     except Exception:
