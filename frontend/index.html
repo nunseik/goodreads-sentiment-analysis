@@ -77,7 +77,7 @@
       gap: 10px;
     }
 
-    input[type="text"] {
+    input[type="url"] {
       flex: 1;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -90,11 +90,11 @@
       transition: border-color 0.2s;
     }
 
-    input[type="text"]::placeholder {
+    input[type="url"]::placeholder {
       color: var(--text-secondary);
     }
 
-    input[type="text"]:focus {
+    input[type="url"]:focus {
       border-color: var(--accent);
     }
 
@@ -121,7 +121,6 @@
       cursor: not-allowed;
     }
 
-    /* Loading */
     .loading {
       display: none;
       align-items: center;
@@ -149,7 +148,38 @@
       to { transform: rotate(360deg); }
     }
 
-    /* Error */
+    /* Model download progress */
+    .progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 18px;
+    }
+
+    .progress-wrap.visible {
+      display: flex;
+    }
+
+    .progress-track {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .progress-label {
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+    }
+
     .error-banner {
       display: none;
       background: var(--error-bg);
@@ -165,7 +195,6 @@
       display: block;
     }
 
-    /* Result card */
     .result-card {
       display: none;
       background: var(--surface);
@@ -271,23 +300,55 @@
       color: var(--text-primary);
       font-size: 0.95rem;
       line-height: 1.75;
+      margin-bottom: 20px;
     }
+
+    .quotes {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .quote-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .quote-label.positive { color: #4caf80; }
+    .quote-label.negative { color: #f87171; }
+
+    .quote-card {
+      border-left: 3px solid;
+      padding: 10px 14px;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      background: var(--surface-raised);
+      font-size: 0.88rem;
+      font-style: italic;
+      line-height: 1.65;
+      color: var(--text-primary);
+    }
+
+    .quote-card.positive { border-color: #4caf80; }
+    .quote-card.negative { border-color: #f87171; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>Goodreads Sentiment Analysis</h1>
-      <p>Enter a book title to get AI-powered reader sentiment</p>
+      <p>Paste a Goodreads book URL to get AI-powered reader sentiment</p>
     </header>
 
     <div class="search-card">
       <form id="search-form">
         <div class="search-row">
           <input
-            type="text"
+            type="url"
             id="book-input"
-            placeholder="e.g. The Great Gatsby"
+            placeholder="https://www.goodreads.com/book/show/..."
             autocomplete="off"
             required
           />
@@ -295,7 +356,13 @@
         </div>
         <div class="loading" id="loading">
           <div class="spinner"></div>
-          <span>Analyzing reader sentiment&hellip;</span>
+          <span id="loading-text">Fetching reviews&hellip;</span>
+        </div>
+        <div class="progress-wrap" id="progress-wrap">
+          <div class="progress-track">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span class="progress-label" id="progress-label">Downloading AI model (first time only)&hellip;</span>
         </div>
         <div class="error-banner" id="error-banner"></div>
       </form>
@@ -315,18 +382,39 @@
       </div>
       <hr class="divider" />
       <p class="summary" id="result-summary"></p>
+      <div class="quotes">
+        <div>
+          <div class="quote-label positive">Positive</div>
+          <div class="quote-card positive" id="quote-positive"></div>
+        </div>
+        <div>
+          <div class="quote-label negative">Negative</div>
+          <div class="quote-card negative" id="quote-negative"></div>
+        </div>
+      </div>
       <a class="goodreads-link" id="goodreads-link" href="#" target="_blank" rel="noopener" style="display:none">
         ↗ View on Goodreads
       </a>
     </div>
   </div>
 
-  <script>
-    const form        = document.getElementById('search-form');
-    const input       = document.getElementById('book-input');
-    const btn         = document.getElementById('analyze-btn');
-    const loading     = document.getElementById('loading');
-    const errorBanner = document.getElementById('error-banner');
+  <script type="module">
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+    const WORKER_URL = "https://fetch-page.nunseik.workers.dev/";
+    const MODEL_ID   = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+    const CACHE_TTL  = 30 * 24 * 60 * 60 * 1000;
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const form          = document.getElementById('search-form');
+    const input         = document.getElementById('book-input');
+    const btn           = document.getElementById('analyze-btn');
+    const loading       = document.getElementById('loading');
+    const loadingText   = document.getElementById('loading-text');
+    const progressWrap  = document.getElementById('progress-wrap');
+    const progressFill  = document.getElementById('progress-fill');
+    const progressLabel = document.getElementById('progress-label');
+    const errorBanner   = document.getElementById('error-banner');
     const resultCard    = document.getElementById('result-card');
     const resultTitle   = document.getElementById('result-title');
     const resultAuthor  = document.getElementById('result-author');
@@ -334,11 +422,161 @@
     const starsDisplay  = document.getElementById('stars-display');
     const ratingNum     = document.getElementById('rating-numeric');
     const resultSum     = document.getElementById('result-summary');
+    const quotePos      = document.getElementById('quote-positive');
+    const quoteNeg      = document.getElementById('quote-negative');
     const goodreadsLink = document.getElementById('goodreads-link');
 
+    // ── Cache ─────────────────────────────────────────────────────────────────
+    function cacheKey(url) { return `bsa:${url}`; }
+
+    function cacheGet(url) {
+      try {
+        const raw = localStorage.getItem(cacheKey(url));
+        if (!raw) return null;
+        const { ts, data } = JSON.parse(raw);
+        if (Date.now() - ts > CACHE_TTL) { localStorage.removeItem(cacheKey(url)); return null; }
+        return data;
+      } catch { return null; }
+    }
+
+    function cacheSet(url, data) {
+      try { localStorage.setItem(cacheKey(url), JSON.stringify({ ts: Date.now(), data })); } catch {}
+    }
+
+    // ── Proxy fetch ───────────────────────────────────────────────────────────
+    async function fetchGoodreadsPage(url) {
+      const res = await fetch(`${WORKER_URL}?url=${encodeURIComponent(url)}`);
+      if (!res.ok) throw new Error(`Worker returned ${res.status}`);
+      return res.text();
+    }
+
+    // ── Quote picker ─────────────────────────────────────────────────────────
+
+    // ── Quote picker ─────────────────────────────────────────────────────────
+    function sentimentScore(text) {
+      const lower = text.toLowerCase();
+      let score = 0;
+      // Strong first-person phrases weighted heavily
+      [["i loved", 4], ["i love this", 4], ["one of the best", 4], ["one of my favorite", 4],
+       ["highly recommend", 4], ["couldn't put it down", 4], ["absolutely loved", 4],
+       ["i adored", 4], ["beautifully written", 3], ["i enjoyed", 3]]
+        .forEach(([p, w]) => { if (lower.includes(p)) score += w; });
+      [["i hated", 4], ["most boring", 4], ["so boring", 4], ["really boring", 4],
+       ["i was disappointed", 4], ["overrated", 3], ["not for me", 3],
+       ["couldn't finish", 3], ["dry and impersonal", 3], ["found it boring", 4],
+       ["i didn't like", 3], ["i didn't enjoy", 3]]
+        .forEach(([p, w]) => { if (lower.includes(p)) score -= w; });
+      // Single words as tiebreakers only
+      ["amazing","brilliant","wonderful","fantastic","enchanting","masterpiece","superb"]
+        .forEach(w => { if (lower.includes(w)) score += 1; });
+      ["boring","tedious","dull","awful","terrible","disappointing","pretentious"]
+        .forEach(w => { if (lower.includes(w)) score -= 1; });
+      return score;
+    }
+
+    function pickQuotes(reviews) {
+      const scored = reviews.map(r => ({ text: r, score: sentimentScore(r) }));
+      scored.sort((a, b) => b.score - a.score);
+      return {
+        positive: scored[0]?.text || null,
+        negative: scored[scored.length - 1]?.text || null,
+      };
+    }
+
+    // ── DOM parsing ───────────────────────────────────────────────────────────
+    function parseBookPage(html) {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+
+      const title =
+        doc.querySelector("h1.Text__title1")?.textContent?.trim() ||
+        doc.querySelector("h1[data-testid='bookTitle']")?.textContent?.trim() ||
+        null;
+
+      const author =
+        doc.querySelector("span.ContributorLink__name")?.textContent?.trim() ||
+        doc.querySelector(".authorName span[itemprop='name']")?.textContent?.trim() ||
+        null;
+
+      const ratingText =
+        doc.querySelector("div.RatingStatistics__rating")?.textContent?.trim() ||
+        doc.querySelector("[data-testid='ratingsAndReviews'] .average")?.textContent?.trim() ||
+        null;
+      const rating = ratingText ? parseFloat(ratingText) : null;
+
+      const reviews = [
+        ...doc.querySelectorAll(".ReviewText__content"),
+        ...doc.querySelectorAll(".reviewText span[id]"),
+      ]
+        .map(el => el.textContent.trim())
+        .filter(t => t.length > 50)
+        .filter((t, i, arr) => arr.indexOf(t) === i) // deduplicate
+        .slice(0, 30);
+
+      return { title, author, rating, reviews };
+    }
+
+    // ── WebLLM ────────────────────────────────────────────────────────────────
+    let engine = null;
+
+    async function getEngine() {
+      if (engine) return engine;
+
+      progressWrap.classList.add('visible');
+      engine = await webllm.CreateMLCEngine(MODEL_ID, {
+        initProgressCallback: ({ progress, text }) => {
+          progressFill.style.width = `${Math.round(progress * 100)}%`;
+          progressLabel.textContent = text || "Downloading AI model (first time only)…";
+        },
+      });
+      progressWrap.classList.remove('visible');
+      return engine;
+    }
+
+    async function summarize({ title, author, rating, reviews }) {
+      const e = await getEngine();
+
+      setLoadingText("Generating summary…");
+
+      const reviewBlock = reviews
+        .slice(0, 10)
+        .map((r, i) => `${i + 1}. ${r.slice(0, 300)}`)
+        .join("\n");
+
+      const ratingLine = rating ? `Community rating: ${rating}/5\n` : "";
+
+      const prompt =
+        `Book: ${title || "Unknown"}\n` +
+        `Author: ${author || "Unknown"}\n` +
+        ratingLine +
+        `\nReader reviews:\n${reviewBlock}\n\n` +
+        `Write a JSON object with two keys:\n` +
+        `- "summary": one sentence capturing the overall reader verdict\n` +
+        `- "rating": estimated star rating from 1.0 to 5.0\n\n` +
+        `Example: {"summary":"A beloved classic that still divides readers.","rating":4.1}\n\n` +
+        `Respond with only the JSON object, nothing else.`;
+
+      const reply = await e.chat.completions.create({
+        messages: [
+          { role: "system", content: "You are a literary critic. Respond with only a valid JSON object." },
+          { role: "user", content: prompt },
+        ],
+      });
+
+      const content = reply.choices[0].message.content;
+      // Extract JSON object from response (handles markdown fences or surrounding text)
+      const match = content.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("Model did not return valid JSON.");
+      return JSON.parse(match[0]);
+    }
+
+    // ── UI helpers ────────────────────────────────────────────────────────────
     function setLoading(on) {
       btn.disabled = on;
       loading.classList.toggle('visible', on);
+    }
+
+    function setLoadingText(msg) {
+      loadingText.textContent = msg;
     }
 
     function showError(msg) {
@@ -352,14 +590,12 @@
     }
 
     function renderStars(rating) {
-      // Round to nearest 0.5
       const rounded = Math.round(rating * 2) / 2;
       let html = '';
       for (let i = 1; i <= 5; i++) {
         if (i <= rounded) {
           html += '<span>&#9733;</span>';
         } else if (i - 0.5 === rounded) {
-          // Half-star: use filled star with reduced opacity via a wrapper span
           html += '<span style="opacity:0.55">&#9733;</span>';
         } else {
           html += '<span class="empty">&#9734;</span>';
@@ -368,57 +604,68 @@
       return html;
     }
 
+    function renderResult(data, cached) {
+      resultTitle.textContent   = data.title || "Unknown title";
+      resultAuthor.textContent  = data.author ? `by ${data.author}` : "";
+      starsDisplay.innerHTML    = renderStars(data.avg_rating ?? 0);
+      ratingNum.textContent     = `${(data.avg_rating ?? 0).toFixed(1)} / 5`;
+      resultSum.textContent     = data.summary || "";
+      quotePos.textContent      = data.positive ? `"${data.positive}"` : "—";
+      quoteNeg.textContent      = data.negative ? `"${data.negative}"` : "—";
+      badgeCached.style.display = cached ? "inline-block" : "none";
+      if (data.goodreads_url) {
+        goodreadsLink.href          = data.goodreads_url;
+        goodreadsLink.style.display = "inline-flex";
+      } else {
+        goodreadsLink.style.display = "none";
+      }
+      resultCard.classList.add('visible');
+    }
+
+    // ── Main handler ──────────────────────────────────────────────────────────
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const title = input.value.trim();
-      if (!title) return;
+      const url = input.value.trim();
+      if (!url) return;
+
+      if (!url.includes("goodreads.com/book/show/")) {
+        showError("Please paste a Goodreads book URL (goodreads.com/book/show/...)");
+        return;
+      }
 
       clearError();
       resultCard.classList.remove('visible');
       setLoading(true);
+      setLoadingText("Fetching reviews…");
 
       try {
-        const response = await fetch('http://localhost:8000/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ book_title: title }),
-        });
-
-        if (!response.ok) {
-          let errMsg = `Server error: ${response.status}`;
-          try {
-            const errData = await response.json();
-            if (errData.detail) errMsg = errData.detail;
-            else if (errData.message) errMsg = errData.message;
-          } catch (_) {}
-          throw new Error(errMsg);
+        const cached = cacheGet(url);
+        if (cached) {
+          renderResult(cached, true);
+          return;
         }
 
-        const data = await response.json();
+        const html = await fetchGoodreadsPage(url);
+        const { title, author, rating, reviews } = parseBookPage(html);
 
-        // Populate result card
-        resultTitle.textContent  = data.book_title || title;
-        resultAuthor.textContent = data.author ? `by ${data.author}` : '';
-        starsDisplay.innerHTML   = renderStars(data.avg_rating ?? 0);
-        ratingNum.textContent    = `${(data.avg_rating ?? 0).toFixed(1)} / 5`;
-        resultSum.textContent    = data.summary || '';
-        badgeCached.style.display = data.cached ? 'inline-block' : 'none';
-        if (data.goodreads_url) {
-          goodreadsLink.href = data.goodreads_url;
-          goodreadsLink.style.display = 'inline-flex';
-        } else {
-          goodreadsLink.style.display = 'none';
+        if (reviews.length === 0) {
+          throw new Error("No reviews found on this page. Make sure it's a book page, not a search result.");
         }
 
-        resultCard.classList.add('visible');
+        setLoadingText("Warming up AI model…");
+        const { summary, rating: llmRating } = await summarize({ title, author, rating, reviews });
+        const { positive, negative } = pickQuotes(reviews);
+
+        const avg_rating = rating ?? llmRating ?? 0;
+        const result = { title, author, summary, positive, negative, avg_rating, goodreads_url: url };
+
+        cacheSet(url, result);
+        renderResult(result, false);
       } catch (err) {
-        if (err.name === 'TypeError') {
-          showError('Could not connect to the server. Make sure the backend is running on localhost:8000.');
-        } else {
-          showError(err.message);
-        }
+        showError(err.message || "Something went wrong. Please try again.");
       } finally {
         setLoading(false);
+        progressWrap.classList.remove('visible');
       }
     });
   </script>
