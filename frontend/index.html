@@ -1362,7 +1362,7 @@
         renderHistoryPanel();
       } catch (err) {
         if (err.message?.includes('502')) {
-          showError('The Goodreads proxy is temporarily unavailable. Try searching by book title instead — the search will automatically use an alternative source.');
+          showError('The Goodreads proxy is temporarily unavailable. Please try again in a few minutes.');
         } else {
           showError(err.message || "Something went wrong. Please try again.");
         }
