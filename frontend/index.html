@@ -452,37 +452,6 @@
 
     // ── Quote picker ─────────────────────────────────────────────────────────
 
-    // ── Quote picker ─────────────────────────────────────────────────────────
-    function sentimentScore(text) {
-      const lower = text.toLowerCase();
-      let score = 0;
-      // Strong first-person phrases weighted heavily
-      [["i loved", 4], ["i love this", 4], ["one of the best", 4], ["one of my favorite", 4],
-       ["highly recommend", 4], ["couldn't put it down", 4], ["absolutely loved", 4],
-       ["i adored", 4], ["beautifully written", 3], ["i enjoyed", 3]]
-        .forEach(([p, w]) => { if (lower.includes(p)) score += w; });
-      [["i hated", 4], ["most boring", 4], ["so boring", 4], ["really boring", 4],
-       ["i was disappointed", 4], ["overrated", 3], ["not for me", 3],
-       ["couldn't finish", 3], ["dry and impersonal", 3], ["found it boring", 4],
-       ["i didn't like", 3], ["i didn't enjoy", 3]]
-        .forEach(([p, w]) => { if (lower.includes(p)) score -= w; });
-      // Single words as tiebreakers only
-      ["amazing","brilliant","wonderful","fantastic","enchanting","masterpiece","superb"]
-        .forEach(w => { if (lower.includes(w)) score += 1; });
-      ["boring","tedious","dull","awful","terrible","disappointing","pretentious"]
-        .forEach(w => { if (lower.includes(w)) score -= 1; });
-      return score;
-    }
-
-    function pickQuotes(reviews) {
-      const scored = reviews.map(r => ({ text: r, score: sentimentScore(r) }));
-      scored.sort((a, b) => b.score - a.score);
-      return {
-        positive: scored[0]?.text || null,
-        negative: scored[scored.length - 1]?.text || null,
-      };
-    }
-
     // ── DOM parsing ───────────────────────────────────────────────────────────
     function parseBookPage(html) {
       const doc = new DOMParser().parseFromString(html, "text/html");
@@ -532,41 +501,39 @@
       return engine;
     }
 
-    async function summarize({ title, author, rating, reviews }) {
+    async function llmCall(system, user) {
       const e = await getEngine();
-
-      setLoadingText("Generating summary…");
-
-      const reviewBlock = reviews
-        .slice(0, 10)
-        .map((r, i) => `${i + 1}. ${r.slice(0, 300)}`)
-        .join("\n");
-
-      const ratingLine = rating ? `Community rating: ${rating}/5\n` : "";
-
-      const prompt =
-        `Book: ${title || "Unknown"}\n` +
-        `Author: ${author || "Unknown"}\n` +
-        ratingLine +
-        `\nReader reviews:\n${reviewBlock}\n\n` +
-        `Write a JSON object with two keys:\n` +
-        `- "summary": one sentence capturing the overall reader verdict\n` +
-        `- "rating": estimated star rating from 1.0 to 5.0\n\n` +
-        `Example: {"summary":"A beloved classic that still divides readers.","rating":4.1}\n\n` +
-        `Respond with only the JSON object, nothing else.`;
-
       const reply = await e.chat.completions.create({
         messages: [
-          { role: "system", content: "You are a literary critic. Respond with only a valid JSON object." },
-          { role: "user", content: prompt },
+          { role: "system", content: system },
+          { role: "user", content: user },
         ],
       });
+      return reply.choices[0].message.content.trim();
+    }
 
-      const content = reply.choices[0].message.content;
-      // Extract JSON object from response (handles markdown fences or surrounding text)
-      const match = content.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("Model did not return valid JSON.");
-      return JSON.parse(match[0]);
+    function reviewList(reviews) {
+      return reviews.slice(0, 15).map((r, i) => `${i + 1}. ${r.slice(0, 150)}`).join("\n");
+    }
+
+    async function pickReview(reviews, polarity) {
+      const label = polarity === "positive" ? "most enthusiastic and positive" : "most critical and negative";
+      const text = await llmCall(
+        "You are a helpful assistant. Reply with only a single number, nothing else.",
+        `Here are reader reviews:\n${reviewList(reviews)}\n\nWhich number is the ${label} review? Reply with only the number.`
+      );
+      const idx = parseInt(text.match(/\d+/)?.[0] ?? "1", 10);
+      return reviews[Math.min(idx - 1, reviews.length - 1)] ?? reviews[0];
+    }
+
+    async function writeSummary(title, author, positiveReview, negativeReview) {
+      return llmCall(
+        "You are a literary critic. Reply with only the summary, no titles or extra commentary.",
+        `Book: ${title || "Unknown"}\nAuthor: ${author || "Unknown"}\n\n` +
+        `A reader who loved it said:\n${positiveReview}\n\n` +
+        `A reader who disliked it said:\n${negativeReview}\n\n` +
+        `Write a summary of what readers think.`
+      );
     }
 
     // ── UI helpers ────────────────────────────────────────────────────────────
@@ -653,10 +620,15 @@
         }
 
         setLoadingText("Warming up AI model…");
-        const { summary, rating: llmRating } = await summarize({ title, author, rating, reviews });
-        const { positive, negative } = pickQuotes(reviews);
+        const positive = await pickReview(reviews, "positive");
 
-        const avg_rating = rating ?? llmRating ?? 0;
+        setLoadingText("Finding critical review…");
+        const negative = await pickReview(reviews, "negative");
+
+        setLoadingText("Writing summary…");
+        const summary = await writeSummary(title, author, positive, negative);
+
+        const avg_rating = rating ?? 0;
         const result = { title, author, summary, positive, negative, avg_rating, goodreads_url: url };
 
         cacheSet(url, result);
