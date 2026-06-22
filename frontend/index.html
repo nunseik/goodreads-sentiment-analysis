@@ -517,22 +517,27 @@
     }
 
     async function pickReview(reviews, polarity) {
-      const label = polarity === "positive" ? "most enthusiastic and positive" : "most critical and negative";
+      const labels = {
+        positive: "most enthusiastic and positive",
+        negative: "most critical and negative",
+        neutral:  "most balanced and neutral (neither strongly positive nor negative)",
+      };
       const text = await llmCall(
         "You are a helpful assistant. Reply with only a single number, nothing else.",
-        `Here are reader reviews:\n${reviewList(reviews)}\n\nWhich number is the ${label} review? Reply with only the number.`
+        `Here are reader reviews:\n${reviewList(reviews)}\n\nWhich number is the ${labels[polarity]} review? Reply with only the number.`
       );
       const idx = parseInt(text.match(/\d+/)?.[0] ?? "1", 10);
       return reviews[Math.min(idx - 1, reviews.length - 1)] ?? reviews[0];
     }
 
-    async function writeSummary(title, author, positiveReview, negativeReview) {
+    async function writeSummary(title, author, positiveReview, neutralReview, negativeReview) {
       return llmCall(
         "You are a literary critic. Reply with only the summary, no titles or extra commentary.",
         `Book: ${title || "Unknown"}\nAuthor: ${author || "Unknown"}\n\n` +
         `A reader who loved it said:\n${positiveReview}\n\n` +
+        `A reader with a balanced view said:\n${neutralReview}\n\n` +
         `A reader who disliked it said:\n${negativeReview}\n\n` +
-        `Write a summary of what readers think.`
+        `Write a balanced summary of what readers think.`
       );
     }
 
@@ -625,8 +630,11 @@
         setLoadingText("Finding critical review…");
         const negative = await pickReview(reviews, "negative");
 
+        setLoadingText("Finding balanced review…");
+        const neutral = await pickReview(reviews, "neutral");
+
         setLoadingText("Writing summary…");
-        const summary = await writeSummary(title, author, positive, negative);
+        const summary = await writeSummary(title, author, positive, neutral, negative);
 
         const avg_rating = rating ?? 0;
         const result = { title, author, summary, positive, negative, avg_rating, goodreads_url: url };
