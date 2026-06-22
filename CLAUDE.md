@@ -1,24 +1,45 @@
 # Goodreads Sentiment Analysis
 
-A learning project demonstrating Claude Code agent teams. Two apps: a FastAPI backend and a single-file HTML frontend.
+A learning project demonstrating Claude Code agent teams. The **primary app** is a browser-only single-file frontend. The backend is a standalone alternative that does the same job server-side.
 
 ## What it does
-1. User submits a book title in the frontend
-2. Backend checks SQLite cache — returns immediately if found
-3. On cache miss: scrapes Goodreads reviews using Playwright (headless Chromium)
-   - Expands collapsed "...more" review text
-   - Scrolls to load up to ~30 reviews
-   - Falls back to mock data if Goodreads blocks the request
-4. VADER sentiment analysis scores each review (logged to console for troubleshooting)
-5. A spread of reviews (most positive, most negative, neutral) is selected and sent to Ollama
-6. Ollama (gemma4:e2b-mlx) generates a 4-5 sentence human-readable summary + star rating estimate
-7. Result stored in SQLite and returned to frontend
 
-## Prerequisites
-- Python 3.11+
-- [Ollama](https://ollama.ai) with gemma4:e2b-mlx: `ollama pull gemma4:e2b-mlx`
+1. User pastes a Goodreads book URL in the frontend
+2. A Cloudflare Worker proxy fetches the page (bypasses CORS)
+3. Reviews are parsed from the HTML (up to 30)
+4. A WebLLM model running in the browser runs a 3-step pipeline:
+   - Pick most positive review
+   - Pick most neutral review
+   - Pick most negative review
+   - Write a balanced summary from all three
+5. Results cached in `localStorage` with a 30-day TTL per model+URL combo
+
+## Architecture
+
+```
+frontend/
+└── index.html           # Single-file browser app — no build step
+
+backend/
+├── main.py              # FastAPI app + endpoints
+├── scraper.py           # Playwright scraper (mock fallback on Goodreads block)
+├── vader_sentiment.py   # VADER sentiment scoring
+├── ollama_summarizer.py # Ollama (gemma4:e2b-mlx) summary generation
+├── categorizer.py       # Review categorization helpers
+├── database.py          # SQLite persistence (books.db, auto-created)
+└── models.py            # Pydantic request/response types
+```
+
+## Running the frontend
+
+Open `frontend/index.html` directly in Chrome 113+ or Edge 113+. No build step needed.
+
+- WebGPU required — Safari and Firefox not supported
+- Models download once and are cached by the browser
+- Cloudflare Worker proxy: `https://fetch-page.nunseik.workers.dev/`
 
 ## Running the backend
+
 ```bash
 cd backend
 uv venv
@@ -27,34 +48,50 @@ uv run playwright install chromium
 uv run uvicorn main:app --reload --port 8000
 ```
 
-## Running the frontend
-Open `frontend/index.html` directly in a browser. No build step needed.
+Requires Ollama running locally: `ollama pull gemma4:e2b-mlx`
 
-## API endpoints
-- `POST /analyze` — `{"book_title": "string"}` → returns summary, rating, author, Goodreads URL
-- `GET /books` — lists all cached books
+## Frontend features
 
-## Architecture
+- **Model selector** — 4 WebLLM models (Qwen 2.5: 0.5B/1.5B/3B, Llama 3.2 1B); engine reloads on model change
+- **System requirements modal** — shown before first download of each model; acknowledgment stored per model ID in localStorage (`req-ack:<modelId>`)
+- **Multi-model analysis** — cache stores an `analyses` array per URL; submitting same URL with different model appends rather than overwrites
+- **Inline stats** — each analysis stores `{ totalMs, totalTokens }` and displays time / tokens / tk/s
+- **History drawer** — lists all cached books from localStorage; click to reload, per-item delete, clear all
+
+## Cache format (localStorage)
+
+Key: `bsa:<goodreads-url>`
+
+```json
+{
+  "ts": 1234567890000,
+  "data": {
+    "title": "...",
+    "author": "...",
+    "avg_rating": 3.9,
+    "goodreads_url": "...",
+    "analyses": [
+      {
+        "modelId": "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+        "modelName": "Qwen 2.5 · 1.5B",
+        "ts": 1234567890000,
+        "summary": "...",
+        "positive": "...",
+        "negative": "...",
+        "stats": { "totalMs": 14200, "totalTokens": 312 }
+      }
+    ]
+  }
+}
 ```
-backend/
-├── main.py              # FastAPI app + endpoints
-├── scraper.py           # Playwright scraper (expands collapsed reviews, mock fallback on block)
-├── vader_sentiment.py   # VADER sentiment scoring (logs compound score + stars to console)
-├── ollama_summarizer.py # Selects review spread, calls Ollama gemma4:e2b-mlx for summary
-├── database.py          # SQLite persistence (book_title, author, summary, avg_rating, goodreads_url)
-└── models.py            # Pydantic request/response types
-frontend/
-└── index.html           # Single-file Vanilla JS UI (stars, author, Goodreads link)
-```
+
+Old cache entries (pre-multi-model) with a flat `summary/positive/negative` structure are migrated automatically by `migrateData()` on read.
+
+## Backend API
+
+- `POST /analyze` — `{"book_title": "string"}` → summary, rating, author, Goodreads URL
+- `GET /cache-stats` — SQLite cache info
 
 ## How this was built
-This project was built using a **Claude Code agent team** — three parallel agents working simultaneously:
-- **Backend-Core agent**: built `main.py`, `database.py`, `models.py`, `requirements.txt`
-- **Pipeline agent**: built `scraper.py`, `vader_sentiment.py`, `ollama_summarizer.py`
-- **Frontend agent**: built `frontend/index.html`
 
-## Notes
-- The scraper uses Playwright (headless Chromium) with browser-like headers. Goodreads may still block requests — the mock fallback ensures the pipeline always works.
-- The SQLite database (`backend/books.db`) is created automatically on first run.
-- Ollama must be running locally (`ollama serve`). If it's not, a template summary is generated from VADER data instead.
-- VADER sentiment results are printed to the server console before each Ollama call — useful for troubleshooting.
+Built with a **Claude Code agent team** — three parallel agents for the initial version, then iterative Claude Code sessions for subsequent features.
