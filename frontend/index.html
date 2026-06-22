@@ -1208,34 +1208,32 @@
       searchResults.classList.remove('visible');
     }
 
-    function parseSearchResults(html) {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const items = [];
+    async function searchBooks(query) {
+      const params = new URLSearchParams({
+        q: query,
+        fields: 'key,title,author_name,ratings_average,isbn,first_publish_year',
+        limit: '10',
+      });
+      const res = await fetch(`https://openlibrary.org/search.json?${params}`);
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
+      const { docs } = await res.json();
 
-      for (const row of doc.querySelectorAll('tr[itemtype="http://schema.org/Book"]')) {
-        const titleEl = row.querySelector('a.bookTitle');
-        if (!titleEl) continue;
-        const href = titleEl.getAttribute('href');
-        if (!href || !href.includes('/book/show/')) continue;
-
-        const url = `https://www.goodreads.com${href.split('?')[0]}`;
-        const title =
-          titleEl.querySelector('span[itemprop="name"]')?.textContent?.trim() ||
-          titleEl.textContent?.trim();
-
-        const authorEl =
-          row.querySelector('a.authorName span[itemprop="name"]') ||
-          row.querySelector('.authorName span') ||
-          row.querySelector('a.authorName');
-        const author = authorEl?.textContent?.trim() || '';
-
-        const ratingMatch = row.querySelector('.minirating')?.textContent?.match(/[\d.]+/);
-        const rating = ratingMatch ? parseFloat(ratingMatch[0]) : null;
-
-        if (title) items.push({ title, author, rating, url });
-      }
-
-      return items.slice(0, 8);
+      return docs
+        .map(doc => {
+          const isbn13 = doc.isbn?.find(i => i.length === 13) || doc.isbn?.[0];
+          const rating = doc.ratings_average != null
+            ? Math.round(doc.ratings_average * 10) / 10
+            : null;
+          return {
+            title: doc.title,
+            author: doc.author_name?.[0] || '',
+            year: doc.first_publish_year || null,
+            rating,
+            goodreadsUrl: isbn13 ? `https://www.goodreads.com/book/isbn/${isbn13}` : null,
+          };
+        })
+        .filter(b => b.goodreadsUrl)
+        .slice(0, 8);
     }
 
     function showSearchResults(results) {
@@ -1252,14 +1250,14 @@
         item.innerHTML = `
           <div class="search-result-body">
             <div class="search-result-title">${book.title}</div>
-            ${book.author ? `<div class="search-result-author">by ${book.author}</div>` : ''}
+            ${book.author ? `<div class="search-result-author">by ${book.author}${book.year ? ` · ${book.year}` : ''}</div>` : ''}
           </div>
-          ${book.rating != null ? `<div class="search-result-rating">★ ${book.rating.toFixed(2)}</div>` : ''}
+          ${book.rating != null ? `<div class="search-result-rating">★ ${book.rating.toFixed(1)}</div>` : ''}
         `;
         item.addEventListener('click', () => {
           clearSearchResults();
-          input.value = book.url;
-          runAnalysis(book.url);
+          input.value = book.goodreadsUrl;
+          runAnalysis(book.goodreadsUrl);
         });
         searchResults.appendChild(item);
       }
@@ -1354,18 +1352,13 @@
         return;
       }
 
-      // Search mode
+      // Search mode — uses Open Library API (no proxy/Puppeteer needed)
       btn.disabled = true;
-      setLoadingText("Searching Goodreads…");
+      setLoadingText("Searching…");
       loading.classList.add('visible');
 
       try {
-        const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(val)}`;
-        const html = await fetch(`${WORKER_URL}?url=${encodeURIComponent(searchUrl)}`).then(r => {
-          if (!r.ok) throw new Error(`Search failed (${r.status})`);
-          return r.text();
-        });
-        const results = parseSearchResults(html);
+        const results = await searchBooks(val);
         showSearchResults(results);
       } catch (err) {
         showError(err.message || "Search failed. Try pasting the Goodreads URL directly.");
