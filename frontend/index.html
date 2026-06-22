@@ -65,7 +65,7 @@
 
     .search-row { display: flex; gap: 10px; }
 
-    input[type="url"] {
+    #book-input {
       flex: 1;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -78,8 +78,65 @@
       transition: border-color 0.2s;
     }
 
-    input[type="url"]::placeholder { color: var(--text-secondary); }
-    input[type="url"]:focus { border-color: var(--accent); }
+    #book-input::placeholder { color: var(--text-secondary); }
+    #book-input:focus { border-color: var(--accent); }
+
+    /* ── Search results ───────────────────────────────────────────────────── */
+    .search-results {
+      display: none;
+      flex-direction: column;
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+
+    .search-results.visible { display: flex; }
+
+    .search-result-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      cursor: pointer;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--surface-raised); }
+
+    .search-result-body { flex: 1; min-width: 0; }
+
+    .search-result-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .search-result-author {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    .search-result-rating {
+      font-size: 0.78rem;
+      color: var(--star-filled);
+      flex-shrink: 0;
+    }
+
+    .search-no-results {
+      padding: 14px 16px;
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      background: var(--bg);
+      text-align: center;
+    }
 
     button[type="submit"] {
       background: var(--accent);
@@ -693,21 +750,23 @@
   <div class="container">
     <header>
       <h1>Goodreads Sentiment Analysis</h1>
-      <p>Paste a Goodreads book URL to get AI-powered reader sentiment</p>
+      <p>Paste a Goodreads URL or search by title to get AI-powered reader sentiment</p>
     </header>
 
     <div class="search-card">
       <form id="search-form">
         <div class="search-row">
           <input
-            type="url"
+            type="text"
             id="book-input"
-            placeholder="https://www.goodreads.com/book/show/..."
+            placeholder="Goodreads URL or book title…"
             autocomplete="off"
+            spellcheck="false"
             required
           />
           <button type="submit" id="analyze-btn">Analyze</button>
         </div>
+        <div class="search-results" id="search-results"></div>
         <div class="model-row">
           <label for="model-select">Model</label>
           <select id="model-select" class="model-select"></select>
@@ -1137,17 +1196,109 @@
 
     renderHistoryPanel();
 
-    // ── Main handler ──────────────────────────────────────────────────────────
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const url = input.value.trim();
-      if (!url) return;
+    // ── Search helpers ────────────────────────────────────────────────────────
+    const searchResultsEl = document.getElementById('search-results');
 
-      if (!url.includes("goodreads.com/book/show/")) {
-        showError("Please paste a Goodreads book URL (goodreads.com/book/show/...)");
+    function isGoodreadsBookUrl(val) {
+      return val.startsWith('http') && val.includes('goodreads.com/book/');
+    }
+
+    function clearSearchResults() {
+      searchResultsEl.innerHTML = '';
+      searchResultsEl.classList.remove('visible');
+    }
+
+    function parseGoodreadsSearchResults(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const items = [];
+      for (const row of doc.querySelectorAll('tr[itemtype="http://schema.org/Book"]')) {
+        const titleEl = row.querySelector('a.bookTitle');
+        if (!titleEl) continue;
+        const href = titleEl.getAttribute('href');
+        if (!href || !href.includes('/book/show/')) continue;
+        const url = `https://www.goodreads.com${href.split('?')[0]}`;
+        const title = titleEl.querySelector('span[itemprop="name"]')?.textContent?.trim() || titleEl.textContent?.trim();
+        const authorEl = row.querySelector('a.authorName span[itemprop="name"]') || row.querySelector('.authorName span') || row.querySelector('a.authorName');
+        const author = authorEl?.textContent?.trim() || '';
+        const ratingMatch = row.querySelector('.minirating')?.textContent?.match(/[\d.]+/);
+        const rating = ratingMatch ? parseFloat(ratingMatch[0]) : null;
+        if (title) items.push({ title, author, rating, url });
+      }
+      return items.slice(0, 8);
+    }
+
+    async function searchViaOpenLibrary(query) {
+      const params = new URLSearchParams({ q: query, fields: 'key,title,author_name,ratings_average,isbn,first_publish_year', limit: '10' });
+      const res = await fetch(`https://openlibrary.org/search.json?${params}`);
+      if (!res.ok) throw new Error(`Open Library search failed (${res.status})`);
+      const { docs } = await res.json();
+      return docs
+        .map(doc => {
+          const isbn13 = doc.isbn?.find(i => i.length === 13) || doc.isbn?.[0];
+          return {
+            title: doc.title,
+            author: doc.author_name?.[0] || '',
+            year: doc.first_publish_year || null,
+            rating: doc.ratings_average != null ? Math.round(doc.ratings_average * 10) / 10 : null,
+            url: isbn13 ? `https://www.goodreads.com/book/isbn/${isbn13}` : null,
+          };
+        })
+        .filter(b => b.url)
+        .slice(0, 8);
+    }
+
+    async function searchBooks(query) {
+      // Primary: Goodreads via worker
+      try {
+        const searchUrl = `https://www.goodreads.com/search?q=${encodeURIComponent(query)}`;
+        const res = await fetch(`${WORKER_URL}?url=${encodeURIComponent(searchUrl)}`);
+        if (res.ok) {
+          const html = await res.text();
+          const results = parseGoodreadsSearchResults(html);
+          if (results.length > 0) return { results, source: 'goodreads' };
+        }
+      } catch (_) {}
+
+      // Fallback: Open Library
+      const results = await searchViaOpenLibrary(query);
+      return { results, source: 'openlibrary' };
+    }
+
+    function showSearchResults(results, source) {
+      searchResultsEl.innerHTML = '';
+      if (results.length === 0) {
+        searchResultsEl.innerHTML = '<div class="search-no-results">No results found. Try a different title or paste the Goodreads URL directly.</div>';
+        searchResultsEl.classList.add('visible');
         return;
       }
 
+      const sourceNote = document.createElement('div');
+      sourceNote.style.cssText = 'font-size:0.72rem;color:var(--text-secondary);padding:6px 14px 4px;';
+      sourceNote.textContent = source === 'goodreads' ? 'Results from Goodreads' : 'Results from Open Library (Goodreads unavailable)';
+      searchResultsEl.appendChild(sourceNote);
+
+      for (const book of results) {
+        const item = document.createElement('div');
+        item.className = 'search-result-item';
+        item.innerHTML = `
+          <div class="search-result-body">
+            <div class="search-result-title">${book.title}</div>
+            ${book.author ? `<div class="search-result-author">by ${book.author}${book.year ? ` · ${book.year}` : ''}</div>` : ''}
+          </div>
+          ${book.rating != null ? `<div class="search-result-rating">★ ${book.rating.toFixed(1)}</div>` : ''}
+        `;
+        item.addEventListener('click', () => {
+          clearSearchResults();
+          input.value = book.url;
+          runAnalysis(book.url);
+        });
+        searchResultsEl.appendChild(item);
+      }
+      searchResultsEl.classList.add('visible');
+    }
+
+    // ── Analysis runner ───────────────────────────────────────────────────────
+    async function runAnalysis(url) {
       clearError();
       resultCard.classList.remove('visible');
 
@@ -1156,10 +1307,7 @@
       const existingData = cacheGet(url);
       if (existingData) {
         const alreadyHasThisModel = existingData.analyses.some(a => a.modelId === model.id);
-        if (alreadyHasThisModel) {
-          renderResult(existingData, true);
-          return;
-        }
+        if (alreadyHasThisModel) { renderResult(existingData, true); return; }
       }
 
       try {
@@ -1217,6 +1365,36 @@
       } finally {
         setLoading(false);
         progressWrap.classList.remove('visible');
+      }
+    }
+
+    // ── Main handler ──────────────────────────────────────────────────────────
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const val = input.value.trim();
+      if (!val) return;
+
+      clearError();
+      clearSearchResults();
+
+      if (isGoodreadsBookUrl(val)) {
+        runAnalysis(val);
+        return;
+      }
+
+      // Search mode
+      btn.disabled = true;
+      setLoadingText("Searching…");
+      loading.classList.add('visible');
+
+      try {
+        const { results, source } = await searchBooks(val);
+        showSearchResults(results, source);
+      } catch (err) {
+        showError(err.message || "Search failed. Try pasting the Goodreads URL directly.");
+      } finally {
+        btn.disabled = false;
+        loading.classList.remove('visible');
       }
     });
   </script>
