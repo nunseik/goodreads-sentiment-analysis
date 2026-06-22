@@ -1361,7 +1361,11 @@
         renderResult(updatedData, false);
         renderHistoryPanel();
       } catch (err) {
-        showError(err.message || "Something went wrong. Please try again.");
+        if (err.message?.includes('502')) {
+          showError('The Goodreads proxy is temporarily unavailable. Try searching by book title instead — the search will automatically use an alternative source.');
+        } else {
+          showError(err.message || "Something went wrong. Please try again.");
+        }
       } finally {
         setLoading(false);
         progressWrap.classList.remove('visible');
