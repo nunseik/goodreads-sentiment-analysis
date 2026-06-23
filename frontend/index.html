@@ -925,19 +925,37 @@
     }
 
     // ── WebLLM ────────────────────────────────────────────────────────────────
+    function isGpuLostError(err) {
+      const msg = err?.message ?? '';
+      return msg.includes('mapAsync') || msg.includes('GPUBuffer') || msg.includes('unmapped') ||
+             msg.includes('GPU') || msg.includes('lost') || msg.includes('device');
+    }
+
     async function llmCall(label, system, user) {
-      const e = await getEngine();
-      const t0 = performance.now();
-      const reply = await e.chat.completions.create({
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      });
-      const elapsed = performance.now() - t0;
-      const tokens = reply.usage?.completion_tokens ?? 0;
-      statsLog.push({ label, elapsed, tokens, tps: elapsed > 0 ? (tokens / elapsed) * 1000 : 0 });
-      return reply.choices[0].message.content.trim();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const e = await getEngine();
+        const t0 = performance.now();
+        try {
+          const reply = await e.chat.completions.create({
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          });
+          const elapsed = performance.now() - t0;
+          const tokens = reply.usage?.completion_tokens ?? 0;
+          statsLog.push({ label, elapsed, tokens, tps: elapsed > 0 ? (tokens / elapsed) * 1000 : 0 });
+          return reply.choices[0].message.content.trim();
+        } catch (err) {
+          if (isGpuLostError(err) && attempt === 0) {
+            // GPU context was lost (tab backgrounded, screen locked, etc.) — reset and retry
+            engine = null;
+            loadedModelId = null;
+            continue;
+          }
+          throw err;
+        }
+      }
     }
 
     function reviewList(reviews) {
