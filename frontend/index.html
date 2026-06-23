@@ -754,7 +754,10 @@
     const CACHE_TTL  = 30 * 24 * 60 * 60 * 1000;
 
     const MODELS = [
-      { id: "Llama-3.2-1B-Instruct-q4f32_1-MLC", name: "Llama 3.2 · 1B", size: "~800 MB", desc: "Default (testing)" },
+      { id: "Qwen2.5-0.5B-Instruct-q4f16_1-MLC", name: "Qwen 2.5 · 0.5B", size: "~390 MB", desc: "Fastest, basic quality" },
+      { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC", name: "Qwen 2.5 · 1.5B", size: "~970 MB", desc: "Balanced — default" },
+      { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC",   name: "Qwen 2.5 · 3B",   size: "~1.9 GB", desc: "Better quality, slower" },
+      { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", name: "Llama 3.2 · 1B",  size: "~740 MB", desc: "Fast, different style" },
     ];
 
     // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -949,29 +952,28 @@
     }
 
     async function llmCall(label, system, user) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const e = await getEngine();
-        const t0 = performance.now();
-        try {
-          const reply = await e.chat.completions.create({
-            messages: [
-              { role: "system", content: system },
-              { role: "user", content: user },
-            ],
-          });
-          const elapsed = performance.now() - t0;
-          const tokens = reply.usage?.completion_tokens ?? 0;
-          statsLog.push({ label, elapsed, tokens, tps: elapsed > 0 ? (tokens / elapsed) * 1000 : 0 });
-          return reply.choices[0].message.content.trim();
-        } catch (err) {
-          if (isGpuLostError(err) && attempt === 0) {
-            // GPU context was lost (tab backgrounded, screen locked, etc.) — reset and retry
-            engine = null;
-            loadedModelId = null;
-            continue;
-          }
-          throw err;
+      const e = await getEngine();
+      const t0 = performance.now();
+      try {
+        const reply = await e.chat.completions.create({
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+        });
+        const elapsed = performance.now() - t0;
+        const tokens = reply.usage?.completion_tokens ?? 0;
+        statsLog.push({ label, elapsed, tokens, tps: elapsed > 0 ? (tokens / elapsed) * 1000 : 0 });
+        return reply.choices[0].message.content.trim();
+      } catch (err) {
+        if (isGpuLostError(err)) {
+          // GPU context lost (tab backgrounded, screen locked) — engine is invalid.
+          // Don't retry: re-downloading hundreds of MB on mobile is unreliable.
+          engine = null;
+          loadedModelId = null;
+          throw new Error("GPU session expired — the AI model was interrupted. Please reload the page and try again.");
         }
+        throw err;
       }
     }
 
