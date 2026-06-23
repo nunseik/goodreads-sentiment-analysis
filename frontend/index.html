@@ -819,12 +819,23 @@
       if (engine) return engine;
       const modelId = modelSelect.value;
       progressWrap.classList.add('visible');
-      engine = await webllm.CreateMLCEngine(modelId, {
-        initProgressCallback: ({ progress, text }) => {
-          progressFill.style.width = `${Math.round(progress * 100)}%`;
-          progressLabel.textContent = text || "Downloading AI model…";
-        },
-      });
+      try {
+        engine = await webllm.CreateMLCEngine(modelId, {
+          initProgressCallback: ({ progress, text }) => {
+            progressFill.style.width = `${Math.round(progress * 100)}%`;
+            progressLabel.textContent = text || "Downloading AI model…";
+          },
+        });
+      } catch (err) {
+        progressWrap.classList.remove('visible');
+        engine = null;
+        loadedModelId = null;
+        const msg = err?.message ?? '';
+        if (msg.includes('Cache') || msg.includes('network error') || msg.includes('fetch')) {
+          throw new Error("Model download failed — check your connection and try again.");
+        }
+        throw err;
+      }
       progressWrap.classList.remove('visible');
       loadedModelId = modelId;
       return engine;
