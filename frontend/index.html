@@ -817,6 +817,15 @@
 
     async function getEngine() {
       if (engine) return engine;
+
+      if (!navigator.gpu) {
+        throw new Error("WebGPU is not supported in this browser. Try Chrome 113+ on a desktop or Android device.");
+      }
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        throw new Error("No WebGPU adapter found — your device or browser may not support it. Try Chrome on a desktop.");
+      }
+
       const modelId = modelSelect.value;
       progressWrap.classList.add('visible');
       try {
@@ -832,7 +841,7 @@
         loadedModelId = null;
         const msg = err?.message ?? '';
         if (msg.includes('Cache') || msg.includes('network error') || msg.includes('fetch')) {
-          throw new Error("Model download failed — check your connection and try again.");
+          throw new Error("Model download failed — your connection may be too slow or unstable. Try the 0.5B model (smallest) or a faster network.");
         }
         throw err;
       }
